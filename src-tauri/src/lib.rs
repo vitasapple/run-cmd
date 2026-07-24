@@ -192,8 +192,9 @@ fn prepare_command(command: &mut Command) {
 #[cfg(windows)]
 fn prepare_command(command: &mut Command) {
   use std::os::windows::process::CommandExt;
+  const CREATE_NO_WINDOW: u32 = 0x0800_0000;
   const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-  command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+  command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -219,9 +220,11 @@ fn stop_child_tree(child: &mut Child) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn stop_child_tree(child: &mut Child) -> std::io::Result<()> {
-  let status = Command::new("taskkill")
-    .args(["/PID", &child.id().to_string(), "/T", "/F"])
-    .status()?;
+  let mut command = Command::new("taskkill");
+  command.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+  prepare_command(&mut command);
+
+  let status = command.status()?;
 
   if status.success() {
     Ok(())
