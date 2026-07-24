@@ -1,18 +1,13 @@
-name: Tauri Build & Release
+name: Tauri Build Windows Only
+
 on:
-  push:
-    tags: ['v*']  # 推送版本标签才触发打包
-  workflow_dispatch:  # 支持网页手动点击运行
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  build-windows:
+    runs-on: windows-latest
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
       - name: Checkout code
@@ -21,11 +16,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
-
-      - name: 切换 npm 国内镜像
-        run: npm config set registry https://registry.npmmirror.com
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
