@@ -36,8 +36,10 @@ const runningKeys = ref<Set<string>>(new Set());
 const busyKey = ref("");
 const notice = ref("");
 const isDraggingOver = ref(false);
+const isSortingInsideApp = ref(false);
 let unlistenDragDrop: (() => void) | undefined;
 let runningTimer: number | undefined;
+let internalDragTimer: number | undefined;
 
 const selectedProject = computed(() => {
   return projects.value.find((project) => project.path === selectedPath.value) ?? projects.value[0];
@@ -90,6 +92,9 @@ onUnmounted(() => {
   if (runningTimer) {
     window.clearInterval(runningTimer);
   }
+  if (internalDragTimer) {
+    window.clearTimeout(internalDragTimer);
+  }
 });
 
 function restoreProjects() {
@@ -108,6 +113,11 @@ function restoreProjects() {
 async function wireNativeDrop() {
   const webview = getCurrentWebview();
   unlistenDragDrop = await webview.onDragDropEvent(async (event) => {
+    if (isSortingInsideApp.value) {
+      isDraggingOver.value = false;
+      return;
+    }
+
     if (event.payload.type === "over") {
       isDraggingOver.value = true;
     }
@@ -124,6 +134,21 @@ async function wireNativeDrop() {
       isDraggingOver.value = false;
     }
   });
+}
+
+function beginInternalDrag() {
+  if (internalDragTimer) {
+    window.clearTimeout(internalDragTimer);
+  }
+  isSortingInsideApp.value = true;
+  isDraggingOver.value = false;
+}
+
+function endInternalDrag() {
+  isDraggingOver.value = false;
+  internalDragTimer = window.setTimeout(() => {
+    isSortingInsideApp.value = false;
+  }, 250);
 }
 
 async function chooseProject() {
@@ -270,6 +295,8 @@ function shortPath(path: string) {
         class="project-list"
         ghost-class="ghost"
         animation="160"
+        @start="beginInternalDrag"
+        @end="endInternalDrag"
       >
         <template #item="{ element }">
           <button
@@ -317,6 +344,8 @@ function shortPath(path: string) {
           class="command-list"
           ghost-class="ghost"
           animation="160"
+          @start="beginInternalDrag"
+          @end="endInternalDrag"
         >
           <template #item="{ element }">
             <article class="command-row">
