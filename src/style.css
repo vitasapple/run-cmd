@@ -91,6 +91,27 @@ h2 {
   font-size: 24px;
 }
 
+.project-name-input {
+  width: min(520px, 100%);
+  min-width: 180px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  color: #10251c;
+  background: transparent;
+  font: inherit;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.1;
+  outline: none;
+}
+
+.project-name-input:hover,
+.project-name-input:focus {
+  border-bottom-color: #9ab7a7;
+}
+
 .icon-button {
   display: inline-grid;
   width: 38px;
@@ -153,14 +174,14 @@ h2 {
   display: grid;
   width: 100%;
   min-height: 64px;
-  grid-template-columns: 22px minmax(0, 1fr) 34px;
+  grid-template-columns: 22px minmax(0, 1fr) 34px 32px;
   align-items: center;
   gap: 8px;
+  padding: 0 6px 0 0;
   border: 1px solid transparent;
   border-radius: 8px;
   color: #1c2822;
   background: transparent;
-  cursor: pointer;
   text-align: left;
 }
 
@@ -171,6 +192,15 @@ h2 {
 
 .project-copy {
   min-width: 0;
+}
+
+.project-select {
+  min-width: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
 }
 
 .project-copy strong,
@@ -208,8 +238,34 @@ h2 {
 }
 
 .drag-handle {
+  display: inline-grid;
+  width: 22px;
+  height: 38px;
+  place-items: center;
   color: #858a80;
   cursor: grab;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.project-remove {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #9d3027;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.68;
+}
+
+.project-remove:hover {
+  background: #f6e4df;
+  opacity: 1;
 }
 
 .command-pane {
@@ -319,6 +375,92 @@ h2 {
 
 .ghost {
   opacity: 0.55;
+}
+
+.chosen {
+  border-color: #89b99f;
+  background: #edf7f1;
+}
+
+.dragging-item {
+  opacity: 0.92;
+}
+
+.console-panel {
+  display: flex;
+  min-height: 168px;
+  max-height: 240px;
+  flex-direction: column;
+  border: 1px solid #ded8c6;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #101713;
+}
+
+.console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #26342c;
+  color: #e6efe9;
+}
+
+.console-header .eyebrow {
+  color: #93a99c;
+}
+
+.console-header strong {
+  display: block;
+  max-width: 520px;
+  overflow: hidden;
+  color: #f0f5f2;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-clear {
+  min-width: 54px;
+  height: 30px;
+  border: 1px solid #3b4d43;
+  border-radius: 8px;
+  color: #d9e6de;
+  background: #17241d;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.console-clear:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.console-output {
+  flex: 1;
+  padding: 10px 12px;
+  overflow: auto;
+  color: #dce8df;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.console-line,
+.console-empty {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.console-line.stderr {
+  color: #ffb4a8;
+}
+
+.console-line.system {
+  color: #98d7b6;
 }
 
 .empty-state {

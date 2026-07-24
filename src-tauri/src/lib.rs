@@ -3,13 +3,14 @@ use serde_json::Value;
 use std::{
   collections::HashMap,
   fs,
+  io::{BufRead, BufReader, Read},
   path::{Path, PathBuf},
   process::{Child, Command, Stdio},
   sync::Mutex,
   thread,
   time::Duration,
 };
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
 struct ProcessState {
@@ -29,6 +30,14 @@ struct ProjectInfo {
 struct ScriptInfo {
   name: String,
   command: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ScriptLogEvent {
+  key: String,
+  stream: String,
+  line: String,
 }
 
 #[tauri::command]
@@ -83,6 +92,7 @@ fn read_project(path: String) -> Result<ProjectInfo, String> {
 
 #[tauri::command]
 fn start_script(
+  app: AppHandle,
   state: State<ProcessState>,
   project_path: String,
   script_name: String,
@@ -115,13 +125,21 @@ fn start_script(
 
   prepare_command(&mut command);
 
-  let child = command
+  let mut child = command
     .current_dir(&project_path)
     .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
     .spawn()
     .map_err(|err| format!("启动命令失败: {err}"))?;
+
+  if let Some(stdout) = child.stdout.take() {
+    stream_script_output(app.clone(), key.clone(), "stdout", stdout);
+  }
+
+  if let Some(stderr) = child.stderr.take() {
+    stream_script_output(app.clone(), key.clone(), "stderr", stderr);
+  }
 
   running.insert(key, child);
   Ok(())
@@ -149,7 +167,7 @@ fn stop_script(
 }
 
 #[tauri::command]
-fn running_scripts(state: State<ProcessState>) -> Result<Vec<String>, String> {
+fn running_scripts(app: AppHandle, state: State<ProcessState>) -> Result<Vec<String>, String> {
   let mut running = state
     .running
     .lock()
@@ -158,9 +176,20 @@ fn running_scripts(state: State<ProcessState>) -> Result<Vec<String>, String> {
 
   for (key, child) in running.iter_mut() {
     match child.try_wait() {
-      Ok(Some(_)) => finished.push(key.clone()),
+      Ok(Some(status)) => {
+        emit_script_log(
+          &app,
+          key,
+          "system",
+          &format!("> exited with {}", status_label(status)),
+        );
+        finished.push(key.clone());
+      }
       Ok(None) => {}
-      Err(_) => finished.push(key.clone()),
+      Err(err) => {
+        emit_script_log(&app, key, "system", &format!("> status check failed: {err}"));
+        finished.push(key.clone());
+      }
     }
   }
 
@@ -181,6 +210,36 @@ fn normalize_path(path: &Path) -> String {
 
 fn process_key(project_path: &str, script_name: &str) -> String {
   format!("{project_path}::{script_name}")
+}
+
+fn stream_script_output<R>(app: AppHandle, key: String, stream: &'static str, output: R)
+where
+  R: Read + Send + 'static,
+{
+  thread::spawn(move || {
+    let reader = BufReader::new(output);
+    for line in reader.lines().map_while(Result::ok) {
+      emit_script_log(&app, &key, stream, &line);
+    }
+  });
+}
+
+fn emit_script_log(app: &AppHandle, key: &str, stream: &str, line: &str) {
+  let _ = app.emit(
+    "script-log",
+    ScriptLogEvent {
+      key: key.to_string(),
+      stream: stream.to_string(),
+      line: line.to_string(),
+    },
+  );
+}
+
+fn status_label(status: std::process::ExitStatus) -> String {
+  match status.code() {
+    Some(code) => format!("code {code}"),
+    None => "signal".to_string(),
+  }
 }
 
 #[cfg(unix)]

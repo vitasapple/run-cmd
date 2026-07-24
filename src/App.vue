@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import draggable from "vuedraggable";
@@ -27,19 +28,35 @@ type ProjectInfo = {
 
 type StoredProject = ProjectInfo & {
   scriptOrder: string[];
+  customName?: string;
+};
+
+type ScriptLogEvent = {
+  key: string;
+  stream: string;
+  line: string;
+};
+
+type ScriptLogLine = ScriptLogEvent & {
+  id: number;
 };
 
 const STORAGE_KEY = "run-cmd.projects.v1";
 const selectedPath = ref("");
 const projects = ref<StoredProject[]>([]);
 const runningKeys = ref<Set<string>>(new Set());
+const scriptLogs = ref<Record<string, ScriptLogLine[]>>({});
+const activeLogKey = ref("");
+const consoleOutput = ref<HTMLElement | null>(null);
 const busyKey = ref("");
 const notice = ref("");
 const isDraggingOver = ref(false);
 const isSortingInsideApp = ref(false);
 let unlistenDragDrop: (() => void) | undefined;
+let unlistenLog: (() => void) | undefined;
 let runningTimer: number | undefined;
 let internalDragTimer: number | undefined;
+let logId = 0;
 
 const selectedProject = computed(() => {
   return projects.value.find((project) => project.path === selectedPath.value) ?? projects.value[0];
@@ -66,6 +83,17 @@ const orderedScripts = computed({
 
 const runningCount = computed(() => runningKeys.value.size);
 
+const activeLogs = computed(() => {
+  return activeLogKey.value ? scriptLogs.value[activeLogKey.value] ?? [] : [];
+});
+
+const activeLogTitle = computed(() => {
+  if (!activeLogKey.value) return "Console";
+  const [projectPath, scriptName] = activeLogKey.value.split("::");
+  const project = projects.value.find((item) => item.path === projectPath);
+  return `${project ? displayProjectName(project) : shortPath(projectPath)} / ${scriptName}`;
+});
+
 watch(
   projects,
   (nextProjects) => {
@@ -80,15 +108,24 @@ watch(selectedProject, (project) => {
   }
 });
 
+watch(activeLogs, async () => {
+  await nextTick();
+  if (consoleOutput.value) {
+    consoleOutput.value.scrollTop = consoleOutput.value.scrollHeight;
+  }
+});
+
 onMounted(async () => {
   restoreProjects();
   await wireNativeDrop();
+  await wireScriptLogs();
   await refreshRunning();
   runningTimer = window.setInterval(refreshRunning, 1600);
 });
 
 onUnmounted(() => {
   unlistenDragDrop?.();
+  unlistenLog?.();
   if (runningTimer) {
     window.clearInterval(runningTimer);
   }
@@ -136,6 +173,12 @@ async function wireNativeDrop() {
   });
 }
 
+async function wireScriptLogs() {
+  unlistenLog = await listen<ScriptLogEvent>("script-log", (event) => {
+    appendScriptLog(event.payload);
+  });
+}
+
 function beginInternalDrag() {
   if (internalDragTimer) {
     window.clearTimeout(internalDragTimer);
@@ -169,7 +212,11 @@ async function addProject(path: string) {
     const project = await invoke<ProjectInfo>("read_project", { path });
     const existing = projects.value.find((item) => item.path === project.path);
     const scriptOrder = mergeScriptOrder(existing?.scriptOrder ?? [], project.scripts);
-    const nextProject: StoredProject = { ...project, scriptOrder };
+    const nextProject: StoredProject = {
+      ...project,
+      customName: existing?.customName,
+      scriptOrder,
+    };
 
     if (existing) {
       Object.assign(existing, nextProject);
@@ -189,9 +236,15 @@ async function reloadProject(project: StoredProject) {
 
 function removeProject(project: StoredProject) {
   projects.value = projects.value.filter((item) => item.path !== project.path);
+  removeProjectLogs(project.path);
   if (selectedPath.value === project.path) {
     selectedPath.value = projects.value[0]?.path ?? "";
   }
+}
+
+function renameProject(project: StoredProject, event: Event) {
+  const value = (event.target as HTMLInputElement).value.trim();
+  project.customName = value || undefined;
 }
 
 async function runScript(script: ScriptInfo) {
@@ -203,6 +256,12 @@ async function runScript(script: ScriptInfo) {
   setNotice("");
 
   try {
+    activeLogKey.value = key;
+    setScriptLog(key, {
+      key,
+      stream: "system",
+      line: `> npm run ${script.name}`,
+    });
     await invoke("start_script", {
       projectPath: project.path,
       scriptName: script.name,
@@ -223,6 +282,11 @@ async function stopScript(script: ScriptInfo) {
   busyKey.value = key;
 
   try {
+    appendScriptLog({
+      key,
+      stream: "system",
+      line: "> stop requested",
+    });
     await invoke("stop_script", {
       projectPath: project.path,
       scriptName: script.name,
@@ -260,6 +324,46 @@ function mergeScriptOrder(order: string[], scripts: ScriptInfo[]) {
   return [...order.filter((name) => scriptNames.includes(name)), ...scriptNames.filter((name) => !order.includes(name))];
 }
 
+function displayProjectName(project: StoredProject) {
+  return project.customName || project.name;
+}
+
+function setScriptLog(key: string, line: ScriptLogEvent) {
+  scriptLogs.value = {
+    ...scriptLogs.value,
+    [key]: [{ ...line, id: ++logId }],
+  };
+}
+
+function appendScriptLog(line: ScriptLogEvent) {
+  const current = scriptLogs.value[line.key] ?? [];
+  scriptLogs.value = {
+    ...scriptLogs.value,
+    [line.key]: [...current, { ...line, id: ++logId }].slice(-500),
+  };
+}
+
+function clearActiveLog() {
+  if (!activeLogKey.value) return;
+  scriptLogs.value = {
+    ...scriptLogs.value,
+    [activeLogKey.value]: [],
+  };
+}
+
+function removeProjectLogs(projectPath: string) {
+  const nextLogs = { ...scriptLogs.value };
+  for (const key of Object.keys(nextLogs)) {
+    if (key.startsWith(`${projectPath}::`)) {
+      delete nextLogs[key];
+    }
+  }
+  scriptLogs.value = nextLogs;
+  if (activeLogKey.value.startsWith(`${projectPath}::`)) {
+    activeLogKey.value = "";
+  }
+}
+
 function setNotice(message: string) {
   notice.value = message;
 }
@@ -291,27 +395,37 @@ function shortPath(path: string) {
       <draggable
         v-model="projects"
         item-key="path"
+        tag="div"
         handle=".drag-handle"
         class="project-list"
         ghost-class="ghost"
+        chosen-class="chosen"
+        drag-class="dragging-item"
         animation="160"
+        :force-fallback="true"
+        :fallback-on-body="true"
         @start="beginInternalDrag"
         @end="endInternalDrag"
       >
         <template #item="{ element }">
-          <button
+          <div
             class="project-item"
             :class="{ active: selectedProject?.path === element.path }"
-            type="button"
-            @click="selectedPath = element.path"
           >
-            <GripVertical class="drag-handle" :size="17" />
-            <span class="project-copy">
-              <strong>{{ element.name }}</strong>
-              <small>{{ shortPath(element.path) }}</small>
+            <span class="drag-handle" title="拖动排序">
+              <GripVertical :size="17" />
             </span>
+            <button class="project-select" type="button" @click="selectedPath = element.path">
+              <span class="project-copy">
+                <strong>{{ displayProjectName(element) }}</strong>
+                <small>{{ shortPath(element.path) }}</small>
+              </span>
+            </button>
             <span class="script-total">{{ element.scripts.length }}</span>
-          </button>
+            <button class="project-remove" type="button" title="从列表移除项目" @click.stop="removeProject(element)">
+              <Trash2 :size="15" />
+            </button>
+          </div>
         </template>
       </draggable>
     </aside>
@@ -321,7 +435,13 @@ function shortPath(path: string) {
         <header class="command-header">
           <div>
             <p class="eyebrow">Commands</p>
-            <h2>{{ selectedProject.name }}</h2>
+            <input
+              class="project-name-input"
+              type="text"
+              :value="displayProjectName(selectedProject)"
+              title="编辑项目显示名"
+              @input="renameProject(selectedProject, $event)"
+            />
             <p class="path-line">{{ selectedProject.path }}</p>
           </div>
           <div class="header-actions">
@@ -340,16 +460,23 @@ function shortPath(path: string) {
         <draggable
           v-model="orderedScripts"
           item-key="name"
+          tag="div"
           handle=".drag-handle"
           class="command-list"
           ghost-class="ghost"
+          chosen-class="chosen"
+          drag-class="dragging-item"
           animation="160"
+          :force-fallback="true"
+          :fallback-on-body="true"
           @start="beginInternalDrag"
           @end="endInternalDrag"
         >
           <template #item="{ element }">
             <article class="command-row">
-              <GripVertical class="drag-handle" :size="18" />
+              <span class="drag-handle" title="拖动排序">
+                <GripVertical :size="18" />
+              </span>
               <div class="command-copy">
                 <strong>{{ element.name }}</strong>
                 <code>{{ element.command }}</code>
@@ -382,6 +509,24 @@ function shortPath(path: string) {
           <Terminal :size="30" />
           <p>这个 package.json 里还没有 scripts。</p>
         </div>
+
+        <section class="console-panel">
+          <div class="console-header">
+            <div>
+              <p class="eyebrow">Console</p>
+              <strong>{{ activeLogTitle }}</strong>
+            </div>
+            <button class="console-clear" type="button" :disabled="!activeLogs.length" @click="clearActiveLog">
+              清空
+            </button>
+          </div>
+          <div ref="consoleOutput" class="console-output" aria-live="polite">
+            <p v-if="!activeLogs.length" class="console-empty">点击运行后会在这里显示输出日志。</p>
+            <p v-for="line in activeLogs" v-else :key="line.id" :class="['console-line', line.stream]">
+              <span>{{ line.line }}</span>
+            </p>
+          </div>
+        </section>
       </div>
 
       <div v-else class="empty-state">
