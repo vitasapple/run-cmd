@@ -2,6 +2,8 @@
 
 一个用 Tauri 2 + Vue 3 做的桌面命令启动器，面向前端项目，尤其适合 Vue 项目。
 
+![QQ20260724-163346.png](https://t.tutu.to/img/eQ7US)
+
 ## 功能
 
 - 选择或拖拽包含 `package.json` 的项目目录
